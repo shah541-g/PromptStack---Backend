@@ -49,9 +49,7 @@ export const connectDB = async () => {
   }
 };
 
-/**
- * Disconnect from MongoDB
- */
+
 export const disconnectDB = async () => {
   try {
     await mongoose.connection.close();
@@ -62,9 +60,6 @@ export const disconnectDB = async () => {
   }
 };
 
-/**
- * Get connection status
- */
 export const getConnectionStatus = () => {
   return {
     isConnected,
@@ -74,9 +69,7 @@ export const getConnectionStatus = () => {
   };
 };
 
-/**
- * Check if database is ready
- */
+
 export const isDBReady = () => {
   return mongoose.connection.readyState === 1;
 };

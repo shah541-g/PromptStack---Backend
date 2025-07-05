@@ -8,10 +8,11 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 import express from "express"
-import config from "./config.cjs"
+import config, { API_KEYS } from "./config.cjs"
 import { connectDB, getConnectionStatus } from "./utils/db.utils.js"
 import { accessLogger, errorLogger, consoleLogger, appLogger } from "./utils/logger.js"
 import router from "./routes/route.index.js"
+import Blackbox from './helpers/blackbox.helper.js';
 
 const { SERVER_CONFIG, DB_CONFIG, JWT_CONFIG, validateEnvironment } = config;
 
@@ -20,7 +21,6 @@ const app = express()
 validateEnvironment()
 
 connectDB()
-
 
 app.use(accessLogger);
 app.use(errorLogger);  
@@ -41,7 +41,6 @@ app.get('/', (req, res) => {
   })
 })
 
-
 app.get('/health', (req, res) => {
   const dbStatus = getConnectionStatus()
   appLogger.info('Health check requested', { dbStatus });
@@ -60,6 +59,12 @@ app.get('/health', (req, res) => {
   })
 })
 
+const model = new Blackbox(API_KEYS.BLACKBOX_API_KEY)
+model.testConnection().then(isConnected => {
+  console.log('Blackbox connection test:', isConnected ? '✅ Success' : '❌ Failed')
+}).catch(error => {
+  console.log('Blackbox connection test failed:', error.message)
+})
 
 app.use((err, req, res, next) => {
   appLogger.error('Unhandled error occurred', err);
@@ -71,7 +76,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-
 app.use((req, res) => {
   appLogger.warn('Route not found', { url: req.originalUrl, method: req.method });
   res.status(404).json({
@@ -80,7 +84,6 @@ app.use((req, res) => {
     statusCode: 404
   });
 });
-
 
 app.listen(SERVER_CONFIG.PORT, () => {
   appLogger.info('Server started successfully', {

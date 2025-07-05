@@ -14,6 +14,7 @@ import { accessLogger, errorLogger, consoleLogger, appLogger } from "./utils/log
 import router from "./routes/route.index.js"
 import Blackbox from './helpers/blackbox.helper.js';
 
+
 const { SERVER_CONFIG, DB_CONFIG, JWT_CONFIG, validateEnvironment } = config;
 
 const app = express()
@@ -21,6 +22,14 @@ const app = express()
 validateEnvironment()
 
 connectDB()
+
+// Set timeouts to prevent ECONNRESET errors
+app.use((req, res, next) => {
+  // Set timeout to 10 minutes for long-running operations
+  req.setTimeout(600000); // 10 minutes
+  res.setTimeout(600000); // 10 minutes
+  next();
+});
 
 app.use(accessLogger);
 app.use(errorLogger);  
@@ -59,12 +68,6 @@ app.get('/health', (req, res) => {
   })
 })
 
-const model = new Blackbox(API_KEYS.BLACKBOX_API_KEY)
-model.testConnection().then(isConnected => {
-  console.log('Blackbox connection test:', isConnected ? '✅ Success' : '❌ Failed')
-}).catch(error => {
-  console.log('Blackbox connection test failed:', error.message)
-})
 
 app.use((err, req, res, next) => {
   appLogger.error('Unhandled error occurred', err);

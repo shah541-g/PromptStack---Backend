@@ -22,7 +22,8 @@ const JWT_CONFIG = {
 
 const API_KEYS = {
   BLACKBOX_API_KEY: process.env.BLACKBOX_API_KEY,
-  GROQ_API_KEY: process.env.GROQ_API_KEY
+  GROQ_API_KEY: process.env.GROQ_API_KEY,
+  GITHUB_TOKEN: process.env.GITHUB_TOKEN
 };
 
 const LOG_CONFIG = {

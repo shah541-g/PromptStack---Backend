@@ -1,5 +1,6 @@
 import { Router } from "express";
 import User from "../../models/users.models.js";
+import { successResponse, errorResponse } from "../../protocols/response.protocols.js";
 
 const router = Router();
 
@@ -9,23 +10,22 @@ router.get('/search/:username', async (req, res) => {
     const user = await User.findByUsername(username);
     
     if (!user || !user.isActive) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
+      return errorResponse(res, {
+        message: 'User not found',
+        statusCode: 404
       });
     }
 
-    res.status(200).json({
-      success: true,
+    return successResponse(res, {
       data: {
         user: user.getPublicProfile()
       }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Failed to search user',
-      error: error.message
+      error: error.message,
+      statusCode: 500
     });
   }
 });

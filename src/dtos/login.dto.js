@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { errorResponse } from '../protocols/response.protocols.js';
 
 export const loginSchema = Joi.object({
   email: Joi.string().email().required().messages({
@@ -14,8 +15,7 @@ export const loginSchema = Joi.object({
 export function validateLoginDto(req, res, next) {
   const { error } = loginSchema.validate(req.body, { abortEarly: false });
   if (error) {
-    return res.status(400).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Validation error',
       error: error.details.map(d => d.message),
       statusCode: 400

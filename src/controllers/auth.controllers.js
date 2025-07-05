@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/users.models.js';
 import config from '../config.cjs';
+import { successResponse, errorResponse } from '../protocols/response.protocols.js';
 
 const { JWT_CONFIG } = config;
 
@@ -16,18 +17,18 @@ export const register = async (req, res) => {
 
     const emailExists = await User.emailExists(email);
     if (emailExists) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email already registered'
+      return errorResponse(res, {
+        message: 'Email already registered',
+        statusCode: 400
       });
     }
 
     if (username) {
       const usernameExists = await User.usernameExists(username);
       if (usernameExists) {
-        return res.status(400).json({
-          success: false,
-          message: 'Username already taken'
+        return errorResponse(res, {
+          message: 'Username already taken',
+          statusCode: 400
         });
       }
     }
@@ -44,19 +45,19 @@ export const register = async (req, res) => {
 
     const token = generateToken(user._id);
 
-    res.status(201).json({
-      success: true,
+    return successResponse(res, {
       message: 'User registered successfully',
       data: {
         user: user.getPublicProfile(),
         token
-      }
+      },
+      statusCode: 201
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Registration failed',
-      error: error.message
+      error: error.message,
+      statusCode: 500
     });
   }
 };
@@ -67,32 +68,30 @@ export const login = async (req, res) => {
 
     const user = await User.findByEmail(email).select('+password');
     if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
+      return errorResponse(res, {
+        message: 'Invalid credentials',
+        statusCode: 401
       });
     }
 
     if (!user.isActive) {
-      return res.status(401).json({
-        success: false,
-        message: 'Account is deactivated'
+      return errorResponse(res, {
+        message: 'Account is deactivated',
+        statusCode: 401
       });
     }
 
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
+      return errorResponse(res, {
+        message: 'Invalid credentials',
+        statusCode: 401
       });
     }
 
-    
     const token = generateToken(user._id);
 
-    res.status(200).json({
-      success: true,
+    return successResponse(res, {
       message: 'Login successful',
       data: {
         user: user.getPublicProfile(),
@@ -100,10 +99,10 @@ export const login = async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Login failed',
-      error: error.message
+      error: error.message,
+      statusCode: 500
     });
   }
 };
@@ -144,12 +143,9 @@ export const continueWithGoogle = async (req, res) => {
       }
     }
 
-    
-
     const token = generateToken(user._id);
 
-    res.status(200).json({
-      success: true,
+    return successResponse(res, {
       message: 'Google authentication successful',
       data: {
         user: user.getPublicProfile(),
@@ -157,10 +153,10 @@ export const continueWithGoogle = async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Google authentication failed',
-      error: error.message
+      error: error.message,
+      statusCode: 500
     });
   }
 };
@@ -210,12 +206,9 @@ export const continueWithGithub = async (req, res) => {
       }
     }
 
-    
-
     const token = generateToken(user._id);
 
-    res.status(200).json({
-      success: true,
+    return successResponse(res, {
       message: 'GitHub authentication successful',
       data: {
         user: user.getPublicProfile(),
@@ -223,25 +216,24 @@ export const continueWithGithub = async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
+    return errorResponse(res, {
       message: 'GitHub authentication failed',
-      error: error.message
+      error: error.message,
+      statusCode: 500
     });
   }
 };
 
 export const logout = async (req, res) => {
   try {
-    res.status(200).json({
-      success: true,
+    return successResponse(res, {
       message: 'Logout successful'
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Logout failed',
-      error: error.message
+      error: error.message,
+      statusCode: 500
     });
   }
 };

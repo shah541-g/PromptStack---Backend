@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import config from '../config.cjs';
+import { errorResponse } from '../protocols/response.protocols.js';
 
 const { JWT_CONFIG } = config;
 
@@ -8,8 +9,7 @@ export const authenticateToken = (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    return res.status(401).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Access token required',
       statusCode: 401
     });
@@ -20,8 +20,7 @@ export const authenticateToken = (req, res, next) => {
     req.user = decoded;
     next();
   } catch (error) {
-    return res.status(403).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Invalid or expired token',
       statusCode: 403
     });

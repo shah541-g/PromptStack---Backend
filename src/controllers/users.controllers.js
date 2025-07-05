@@ -1,26 +1,26 @@
 import User from '../models/users.models.js';
+import { successResponse, errorResponse } from '../protocols/response.protocols.js';
 
 export const getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId);
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
+      return errorResponse(res, {
+        message: 'User not found',
+        statusCode: 404
       });
     }
 
-    res.status(200).json({
-      success: true,
+    return successResponse(res, {
       data: {
         user: user.getPublicProfile()
       }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Failed to get profile',
-      error: error.message
+      error: error.message,
+      statusCode: 500
     });
   }
 };
@@ -38,9 +38,9 @@ export const updateProfile = async (req, res) => {
     if (username) {
       const usernameExists = await User.usernameExists(username);
       if (usernameExists) {
-        return res.status(400).json({
-          success: false,
-          message: 'Username already taken'
+        return errorResponse(res, {
+          message: 'Username already taken',
+          statusCode: 400
         });
       }
       updateData.username = username;
@@ -53,28 +53,26 @@ export const updateProfile = async (req, res) => {
     );
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
+      return errorResponse(res, {
+        message: 'User not found',
+        statusCode: 404
       });
     }
 
-    res.status(200).json({
-      success: true,
+    return successResponse(res, {
       message: 'Profile updated successfully',
       data: {
         user: user.getPublicProfile()
       }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Failed to update profile',
-      error: error.message
+      error: error.message,
+      statusCode: 500
     });
   }
 };
-
 
 export const deleteAccount = async (req, res) => {
   try {
@@ -85,21 +83,20 @@ export const deleteAccount = async (req, res) => {
     );
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
+      return errorResponse(res, {
+        message: 'User not found',
+        statusCode: 404
       });
     }
 
-    res.status(200).json({
-      success: true,
+    return successResponse(res, {
       message: 'Account deactivated successfully'
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Failed to deactivate account',
-      error: error.message
+      error: error.message,
+      statusCode: 500
     });
   }
 };

@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { errorResponse } from '../protocols/response.protocols.js';
 
 export const registerSchema = Joi.object({
   firstName: Joi.string().min(2).max(50).required().messages({
@@ -29,8 +30,7 @@ export const registerSchema = Joi.object({
 export function validateRegisterDto(req, res, next) {
   const { error } = registerSchema.validate(req.body, { abortEarly: false });
   if (error) {
-    return res.status(400).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Validation error',
       error: error.details.map(d => d.message),
       statusCode: 400

@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { errorResponse } from '../protocols/response.protocols.js';
 
 export const githubAuthSchema = Joi.object({
   githubId: Joi.string().required().messages({
@@ -31,8 +32,7 @@ export const githubAuthSchema = Joi.object({
 export function validateGithubAuthDto(req, res, next) {
   const { error } = githubAuthSchema.validate(req.body, { abortEarly: false });
   if (error) {
-    return res.status(400).json({
-      success: false,
+    return errorResponse(res, {
       message: 'Validation error',
       error: error.details.map(d => d.message),
       statusCode: 400

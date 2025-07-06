@@ -68,6 +68,8 @@ app.get('/health', (req, res) => {
   })
 })
 
+// const model = new Blackbox(API_KEYS.BLACKBOX_API_KEY)
+// console.log(await model.testConnection())
 
 app.use((err, req, res, next) => {
   appLogger.error('Unhandled error occurred', err);

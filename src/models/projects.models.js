@@ -1,6 +1,10 @@
-import mongoose from "mongoose";
+import mongoose, { Mongoose } from "mongoose";
+import { type } from "os";
 
 const projectSchema = new mongoose.Schema({
+    prompts: {
+
+    },
     name: {
         type: String,
         required: [true, 'name is required'],
@@ -22,6 +26,10 @@ const projectSchema = new mongoose.Schema({
     },
     deployedURL: {
         type: String
+    },
+    requirments: {
+        type: mongoose.Schema.Types.Mixed,
+        default: []
     }
 }, {
     timestamps: true

@@ -30,6 +30,33 @@ const projectSchema = new mongoose.Schema({
     requirments: {
         type: mongoose.Schema.Types.Mixed,
         default: []
+    },
+    stringStucture: {
+        type: String,
+        default: `
+├── .git/
+├── node_modules/
+├── package-lock.json
+├── package.json
+├── src/
+│   └── app/
+│       ├── page.tsx
+│       ├── layout.tsx
+│       ├── favicon.ico
+│       └── globals.css
+├── public/
+│   ├── window.svg
+│   ├── vercel.svg
+│   ├── next.svg
+│   ├── globe.svg
+│   └── file.svg
+├── tsconfig.json
+├── next.config.ts
+├── next-env.d.ts
+├── postcss.config.mjs
+├── eslint.config.mjs
+├── README.md
+└── .gitignore`
     }
 }, {
     timestamps: true

@@ -31,7 +31,6 @@ export const createProject = async (req, res) => {
             });
         }
 
-        console.log("Creating GitHub repo and pushing...");
         try {
             
             const timeoutPromise = new Promise((_, reject) => {

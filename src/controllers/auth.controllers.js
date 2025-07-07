@@ -13,7 +13,7 @@ const generateToken = (userId) => {
 
 export const register = async (req, res) => {
   try {
-    const { firstName, lastName, email, password, username } = req.body;
+    const { firstName, lastName, email, password } = req.body;
 
     const emailExists = await User.emailExists(email);
     if (emailExists) {
@@ -23,24 +23,15 @@ export const register = async (req, res) => {
       });
     }
 
-    if (username) {
-      const usernameExists = await User.usernameExists(username);
-      if (usernameExists) {
-        return errorResponse(res, {
-          message: 'Username already taken',
-          statusCode: 400
-        });
-      }
-    }
-
+    const index = Math.floor(Math.random() * 100) + 1;
+    const randomAvatar = `https://avatar.iran.liara.run/public/${index}`;
     const user = new User({
       firstName,
       lastName,
       email,
       password,
-      username
+      avatar:randomAvatar
     });
-
     await user.save();
 
     const token = generateToken(user._id);
@@ -61,6 +52,45 @@ export const register = async (req, res) => {
     });
   }
 };
+
+export const onBoarding = async (req, res) => {
+  const { id } = req.params;
+  const { userName, bio, avatar } = req.body;
+
+  try {
+    const findUser = await User.findById(id);
+
+    if (!findUser) {
+      return errorResponse(res, {
+        message: "User not found",
+        statusCode: 404
+      });
+    }
+
+    findUser.username = userName;
+    findUser.bio = bio;
+    if (avatar) findUser.avatar = avatar;
+    findUser.onboarding = true;
+
+    await findUser.save();
+
+    return successResponse(res, {
+      message: "User onboarded successfully",
+      data: {
+        user: findUser.getPublicProfile()
+      },
+      statusCode: 200
+    });
+
+  } catch (error) {
+    return errorResponse(res, {
+      message: "Onboarding failed",
+      error: error.message,
+      statusCode: 500
+    });
+  }
+};
+
 
 export const login = async (req, res) => {
   try {
@@ -110,7 +140,7 @@ export const login = async (req, res) => {
 export const continueWithGoogle = async (req, res) => {
   try {
     const { googleId, email, firstName, lastName, avatar } = req.body;
-
+    // console.log(`data from backend ${googleId}\n${email}\n${firstName+ " "+ lastName}\n${avatar}`,)
     let user = await User.findOne({
       'socialAccounts.provider': 'google',
       'socialAccounts.providerId': googleId

@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import cors from 'cors';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,6 +31,12 @@ app.use((req, res, next) => {
   res.setTimeout(600000); // 10 minutes
   next();
 });
+
+app.use(cors({
+  origin: 'http://localhost:5173', // Frontend origin
+  credentials: true // allow cookies / authorization headers
+}));
+
 
 app.use(accessLogger);
 app.use(errorLogger);  

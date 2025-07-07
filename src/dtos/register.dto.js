@@ -20,11 +20,11 @@ export const registerSchema = Joi.object({
     'string.empty': 'Password is required',
     'string.min': 'Password must be at least 8 characters'
   }),
-  username: Joi.string().min(3).max(30).pattern(/^[a-zA-Z0-9_]+$/).optional().messages({
-    'string.min': 'Username must be at least 3 characters',
-    'string.max': 'Username cannot exceed 30 characters',
-    'string.pattern.base': 'Username can only contain letters, numbers, and underscores'
-  })
+  // username: Joi.string().min(3).max(30).pattern(/^[a-zA-Z0-9_]+$/).optional().messages({
+  //   'string.min': 'Username must be at least 3 characters',
+  //   'string.max': 'Username cannot exceed 30 characters',
+  //   'string.pattern.base': 'Username can only contain letters, numbers, and underscores'
+  // })
 });
 
 export function validateRegisterDto(req, res, next) {

@@ -6,6 +6,7 @@ import { formatInstructionForBlackbox, generateSrsFromPrompt, generateSrsFromPro
 import projectsModels from "../models/projects.models.js";
 import promptsModels from "../models/prompts.models.js";
 import { errorResponse, successResponse } from "../protocols/response.protocols.js";
+import pLimit from 'p-limit';
 
 export const testConnection = async (req, res) => {
     try {
@@ -109,7 +110,9 @@ ${firstPrompt? firstPrompt :prompt}
         
         const getReadCode = "GET ALL THE FILES THAT WE WILL NEED FOR THIS PROMPT: " + finalPrompt + " IMPORTANT: ONLY USE THE READ TOOL";
         console.log(getReadCode)
-        const readResponse = await model.chat([{ role: "user", content: getReadCode }]);
+        const readResponse = await model.chat([{ role: "user", content: getReadCode }])
+            ;
+        console.log("Read response", readResponse)
         const parser = new OutputParser();
         let filesToRead = [];
         try {
@@ -118,27 +121,51 @@ ${firstPrompt? firstPrompt :prompt}
         } catch (e) {
             console.log("Error parsing read tool response:", e);
         }
-        // STEP 2: Fetch the content of those files from GitHub
-        const token = process.env.GITHUB_TOKEN || (global.API_KEYS && global.API_KEYS.GITHUB_TOKEN);
-        const repoInfo = require('../helpers/projects.helper.js').extractRepoInfo(githubRepoUrl);
-        const { getFileFromGitHub } = require('../helpers/projects.helper.js');
-        const fileContents = [];
-        for (const filePath of filesToRead) {
-            try {
-                const fileData = await getFileFromGitHub(repoInfo, filePath, token);
-                const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
-                fileContents.push({ filePath, content });
-            } catch (err) {
-                fileContents.push({ filePath, content: '[File not found or error reading]' });
-            }
+        console.log("files to read", filesToRead)
+        // STEP 2: Fetch the content of those files from GitHub (parallel with limit and timeout)
+        function withTimeout(promise, ms, filePath) {
+            return Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout fetching ${filePath}`)), ms))
+            ]);
         }
+        const limit = pLimit(5); // max 5 concurrent requests
+        const token = process.env.GITHUB_TOKEN || (global.API_KEYS && global.API_KEYS.GITHUB_TOKEN);
+        const repoInfo = { owner: "usman-temp", repo: projectId };
+        const fileContents = await Promise.all(filesToRead.map(filePath =>
+            limit(async () => {
+                try {
+                    // console.log("Fetching file from GitHub:", filePath);
+                    const fileData = await withTimeout(readFileFromGitHub(repoInfo, filePath, token), 10000, filePath);
+                    let content = '';
+                    if (fileData.encoding === 'base64') {
+                        content = Buffer.from(fileData.content, 'base64').toString('utf-8');
+                    } else if (fileData.content) {
+                        content = fileData.content;
+                    } else if (fileData && fileData.content === '') {
+                        content = '';
+                    } else {
+                        content = '[File not found or error reading]';
+                    }
+                    // console.log("Fetched file:", filePath);
+                    return { filePath, content };
+                } catch (err) {
+                    // console.log("Error fetching file:", filePath, err);
+                    if (err && err.response) {
+                        console.log("Full error response for file", filePath, ":", err.response);
+                    }
+                    return { filePath, content: '[File not found or error reading]' };
+                }
+            })
+        ));
+        // console.log("hello")
         // STEP 3: Build the context string
         const contextFilesString = fileContents.map(f => `File: ${f.filePath}\n\n${f.content}\n`).join('\n');
         // STEP 4: Prepend this to your finalPrompt
-        console.log("context files", contextFilesString)
+        // console.log("context files", contextFilesString)
         const finalPromptWithContext = `CONTEXT FILES:\n${contextFilesString}\n\n${finalPrompt}`;
 
-        console.log("final prompt with context", finalPromptWithContext )
+        // console.log("final prompt with context", finalPromptWithContext )
         const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => reject(new Error('Blackbox operation timed out after 5 minutes')), 30000000);
         });

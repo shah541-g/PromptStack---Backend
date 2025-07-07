@@ -253,31 +253,55 @@ export async function createFilesFromCodeArray(projectId, codeArray, githubRepoU
   }
 }
 
-export async function readFileFromGitHub(repoUrl, filePath, token, startLine = null, endLine = null, io, projectId) {
-  const repoInfo = extractRepoInfo(repoUrl);
-  const fileData = await getFileFromGitHub(repoInfo, filePath, token);
-  if (!fileData.content) {
-    console.warn(`Warning: File ${filePath} has no content on GitHub.`);
+export async function readFileFromGitHub(repoUrlOrInfo, filePath, token, startLine = null, endLine = null, io, projectId) {
+  let repoInfo;
+  if (typeof repoUrlOrInfo === 'string') {
+    repoInfo = extractRepoInfo(repoUrlOrInfo);
+  } else {
+    repoInfo = repoUrlOrInfo;
+  }
+  console.log('[readFileFromGitHub] repoInfo:', repoInfo, 'filePath:', filePath);
+  try {
+    const fileData = await getFileFromGitHub(repoInfo, filePath, token);
+    if (!fileData.content) {
+      console.warn(`[readFileFromGitHub] Warning: File ${filePath} has no content on GitHub.`);
+      return {
+        filePath,
+        content: '',
+        startLine,
+        endLine,
+        totalLines: 0
+      };
+    }
+    const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
+    if (io && projectId) {
+      io.to(projectId).emit('file:read', { path: filePath, operation: 'read' });
+      console.log(`[readFileFromGitHub] Emitted file:read to room ${projectId} for file ${filePath}`);
+    }
     return {
       filePath,
-      content: '',
+      content,
+      startLine: null,
+      endLine: null,
+      totalLines: content.split('\n').length
+    };
+  } catch (error) {
+    console.error(`[readFileFromGitHub] Error reading file ${filePath}:`, error);
+    if (error && error.response) {
+      console.error(`[readFileFromGitHub] Full error response for file ${filePath}:`, error.response);
+    }
+    let notFound = false;
+    if (error && error.message && error.message.includes('not found on GitHub')) {
+      notFound = true;
+    }
+    return {
+      filePath,
+      content: notFound ? '[File not found on GitHub]' : '[File not found or error reading]',
       startLine,
       endLine,
       totalLines: 0
     };
   }
-  const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
-  if (io && projectId) {
-    io.to(projectId).emit('file:read', { path: filePath, operation: 'read' });
-    console.log(`Emitted file:read to room ${projectId} for file ${filePath}`);
-  }
-  return {
-    filePath,
-    content,
-    startLine: null,
-    endLine: null,
-    totalLines: content.split('\n').length
-  };
 }
 
 export function buildFileReadPrompt({ filePath, content, startLine, endLine, totalLines }) {
@@ -577,4 +601,47 @@ function updateFileStructure(currentStructure, filePath, action) {
   }
   
   return lines.join('\n');
+}
+
+/**
+ * Create a new Vercel project from a GitHub repo URL.
+ * @param {string} githubRepoUrl - The full GitHub repo URL (e.g. https://github.com/owner/repo)
+ * @param {string} projectName - The name for the new Vercel project
+ * @returns {Promise<object>} - The created Vercel project info
+ *
+ * Requires VERCEL_TOKEN in config or process.env.
+ */
+export async function createVercelProjectFromGitRepo(githubRepoUrl, projectName) {
+  const VERCEL_TOKEN = config.VERCEL_TOKEN || process.env.VERCEL_TOKEN;
+  if (!VERCEL_TOKEN) throw new Error('VERCEL_TOKEN not found in config or environment');
+
+  // Parse owner/repo from URL
+  const match = githubRepoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)(\.git)?$/);
+  if (!match) throw new Error('Invalid GitHub repo URL');
+  const owner = match[1];
+  const repo = match[2];
+
+  // Vercel API endpoint
+  const apiUrl = 'https://api.vercel.com/v9/projects';
+
+  // Prepare payload
+  const payload = {
+    name: projectName,
+    gitRepository: {
+      type: 'github',
+      repo: `${owner}/${repo}`
+    },
+    buildCommand: null, // Let Vercel auto-detect
+    outputDirectory: null, // Let Vercel auto-detect
+    framework: null // Let Vercel auto-detect
+  };
+
+  // Create project on Vercel
+  const response = await axios.post(apiUrl, payload, {
+    headers: {
+      Authorization: `Bearer ${VERCEL_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  return response.data;
 }

@@ -106,9 +106,39 @@ User Says:
 ${firstPrompt? firstPrompt :prompt}
         `
 
-        const getReadCode = "GET ALL THE THAT WE WILL FOR THIS PROMPT "+finalPrompt + "IMPORTANT: ONLY GIVE THE READ TOOL"
+        
+        const getReadCode = "GET ALL THE FILES THAT WE WILL NEED FOR THIS PROMPT: " + finalPrompt + " IMPORTANT: ONLY USE THE READ TOOL";
+        console.log(getReadCode)
+        const readResponse = await model.chat([{ role: "user", content: getReadCode }]);
+        const parser = new OutputParser();
+        let filesToRead = [];
+        try {
+            const readParse = parser.extractAndValidate(readResponse.choices[0].message.content, BlackboxOutputSehema);
+            filesToRead = (readParse.code || []).filter(c => c.tool === 'read').map(c => c.path);
+        } catch (e) {
+            console.log("Error parsing read tool response:", e);
+        }
+        // STEP 2: Fetch the content of those files from GitHub
+        const token = process.env.GITHUB_TOKEN || (global.API_KEYS && global.API_KEYS.GITHUB_TOKEN);
+        const repoInfo = require('../helpers/projects.helper.js').extractRepoInfo(githubRepoUrl);
+        const { getFileFromGitHub } = require('../helpers/projects.helper.js');
+        const fileContents = [];
+        for (const filePath of filesToRead) {
+            try {
+                const fileData = await getFileFromGitHub(repoInfo, filePath, token);
+                const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
+                fileContents.push({ filePath, content });
+            } catch (err) {
+                fileContents.push({ filePath, content: '[File not found or error reading]' });
+            }
+        }
+        // STEP 3: Build the context string
+        const contextFilesString = fileContents.map(f => `File: ${f.filePath}\n\n${f.content}\n`).join('\n');
+        // STEP 4: Prepend this to your finalPrompt
+        console.log("context files", contextFilesString)
+        const finalPromptWithContext = `CONTEXT FILES:\n${contextFilesString}\n\n${finalPrompt}`;
 
-        console.log("final prompt", finalPrompt )
+        console.log("final prompt with context", finalPromptWithContext )
         const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => reject(new Error('Blackbox operation timed out after 5 minutes')), 30000000);
         });
@@ -118,7 +148,7 @@ ${firstPrompt? firstPrompt :prompt}
         }));
         try {
             const response = await Promise.race([
-                model.chat([...prompts, { role: "user", content: finalPrompt }]),
+                model.chat([...prompts, { role: "user", content: finalPromptWithContext }]),
                 timeoutPromise
             ]);
             const parser = new OutputParser();

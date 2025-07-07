@@ -1,7 +1,7 @@
 import { BlackboxOutputSehema } from "../dtos/blackbox.dto.js";
 import Blackbox from "../helpers/blackbox.helper.js";
 import OutputParser from "../helpers/outputparser.helper.js";
-import { createFilesFromCodeArray, readFileFromGitHub, buildFileReadPrompt, getPromptContext, addPromptToContext } from "../helpers/projects.helper.js";
+import { createFilesFromCodeArray, readFileFromGitHub, buildFileReadPrompt, getPromptContext, addPromptToContext, checkGithubBuildStatus, waitForGithubBuildStatus } from "../helpers/projects.helper.js";
 import { formatInstructionForBlackbox, generateSrsFromPrompt, generateSrsFromPromptResponse, streamEngagementMarkdown } from "../helpers/prompts.helper.js";
 import projectsModels from "../models/projects.models.js";
 import promptsModels from "../models/prompts.models.js";
@@ -44,13 +44,13 @@ export const generate = async (req, res) => {
     try {
         const { prompt } = req.body;
         if (!prompt) {
-            return errorResponse(res, {message: "Prompt is required", statusCode: 400});
+            return errorResponse(res, { message: "Prompt is required", statusCode: 400 });
         }
         const { projectId } = req.params;
         
         
         const githubRepoUrl = `https://github.com/usman-temp/${projectId}.git`;
-        const project = await projectsModels.findById(projectId)
+        const project = await projectsModels.findOne({_id: projectId, user: req.user._id})
         if (!project) {
             return errorResponse(res, {
                 message: "Project not found",
@@ -80,9 +80,10 @@ export const generate = async (req, res) => {
             });
         }
 
-        await streamEngagementMarkdown({ userPrompt: firstPrompt? firstPrompt :prompt, socket: global.io, roomId: projectId });
+        await streamEngagementMarkdown({ userPrompt: firstPrompt ? firstPrompt : prompt, socket: global.io, roomId: projectId });
         const model = new Blackbox();
-        const finalPrompt = `
+        let attempt = 0;
+        let finalPrompt = `
 
         BEFORE EDITING FILE FIRST CALL READ TOOL FIRST
         You are coding agent i will give requiremts and etc or simple user prompt you creat the project according to project stucture
@@ -104,117 +105,130 @@ This is the format instructions
 ${formatInstructionForBlackbox}
 
 User Says:
-${firstPrompt? firstPrompt :prompt}
-        `
 
+${firstPrompt? firstPrompt: prompt}
+        `;
+        let buildStatusResult;
+        let parseContent = null;
+        while (true) {
+            
+            attempt++;
+            
         
-        const getReadCode = "GET ALL THE FILES THAT WE WILL NEED FOR THIS PROMPT: " + finalPrompt + " IMPORTANT: ONLY USE THE READ TOOL";
-        console.log(getReadCode)
-        const readResponse = await model.chat([{ role: "user", content: getReadCode }])
-            ;
-        console.log("Read response", readResponse)
-        const parser = new OutputParser();
-        let filesToRead = [];
-        try {
-            const readParse = parser.extractAndValidate(readResponse.choices[0].message.content, BlackboxOutputSehema);
-            filesToRead = (readParse.code || []).filter(c => c.tool === 'read').map(c => c.path);
-        } catch (e) {
-            console.log("Error parsing read tool response:", e);
-        }
-        console.log("files to read", filesToRead)
-        // STEP 2: Fetch the content of those files from GitHub (parallel with limit and timeout)
-        function withTimeout(promise, ms, filePath) {
-            return Promise.race([
-                promise,
-                new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout fetching ${filePath}`)), ms))
-            ]);
-        }
-        const limit = pLimit(5); // max 5 concurrent requests
-        const token = process.env.GITHUB_TOKEN || (global.API_KEYS && global.API_KEYS.GITHUB_TOKEN);
-        const repoInfo = { owner: "usman-temp", repo: projectId };
-        const fileContents = await Promise.all(filesToRead.map(filePath =>
-            limit(async () => {
-                try {
-                    // console.log("Fetching file from GitHub:", filePath);
-                    const fileData = await withTimeout(readFileFromGitHub(repoInfo, filePath, token), 10000, filePath);
-                    let content = '';
-                    if (fileData.encoding === 'base64') {
-                        content = Buffer.from(fileData.content, 'base64').toString('utf-8');
-                    } else if (fileData.content) {
-                        content = fileData.content;
-                    } else if (fileData && fileData.content === '') {
-                        content = '';
-                    } else {
-                        content = '[File not found or error reading]';
-                    }
-                    // console.log("Fetched file:", filePath);
-                    return { filePath, content };
-                } catch (err) {
-                    // console.log("Error fetching file:", filePath, err);
-                    if (err && err.response) {
-                        console.log("Full error response for file", filePath, ":", err.response);
-                    }
-                    return { filePath, content: '[File not found or error reading]' };
-                }
-            })
-        ));
-        // console.log("hello")
-        // STEP 3: Build the context string
-        const contextFilesString = fileContents.map(f => `File: ${f.filePath}\n\n${f.content}\n`).join('\n');
-        // STEP 4: Prepend this to your finalPrompt
-        // console.log("context files", contextFilesString)
-        const finalPromptWithContext = `CONTEXT FILES:\n${contextFilesString}\n\n${finalPrompt}`;
-
-        // console.log("final prompt with context", finalPromptWithContext )
-        const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Blackbox operation timed out after 5 minutes')), 30000000);
-        });
-        const promptArray = prompts.map(p => ({
-            role: p.role,
-            content: p.content
-        }));
-        try {
-            const response = await Promise.race([
-                model.chat([...prompts, { role: "user", content: finalPromptWithContext }]),
-                timeoutPromise
-            ]);
+        
+            const getReadCode = "GET ALL THE FILES THAT WE WILL NEED FOR THIS PROMPT: " + finalPrompt + ` IMPORTANT: - ONLY USE THE READ TOOL`;
+            console.log(getReadCode)
+            const readResponse = await model.chat([{ role: "user", content: getReadCode }])
+                ;
+            console.log("Read response", readResponse)
             const parser = new OutputParser();
-            await promptsModels.create({
-                content: response.choices[0].message.content,
-                role: "agent"
-            })
-            let parseContent;
-            let codeArray;
-            let aiResponse = response;
-            let loopCount = 0;
-            const maxLoops = 10;
-            let usedFallbackJson = false;
-            let usedNonJsonCodeBlock = false;
-            const io = global.io;
-            while (loopCount < maxLoops) {
-                try {
-                    parseContent = parser.extractAndValidate(aiResponse.choices[0].message.content, BlackboxOutputSehema);
-                    codeArray = parseContent.code;
-                    usedFallbackJson = false;
-                    usedNonJsonCodeBlock = false;
-                } catch (parseError) {
-                    console.log("parseError", parseError)
-                    if (parseError.message.includes('No JSON blocks found')) {
-                        try {
-                            const jsonBlocks = parser.extractJsonBlocks(aiResponse.choices[0].message.content);
-                            console.log("json blocks", jsonBlocks)
-                            if (jsonBlocks.length > 0) {
-                                const codeBlockMatch = aiResponse.choices[0].message.content.match(/```[a-zA-Z]*\s*([\s\S]*?)\s*```/);
-                                if (codeBlockMatch && !aiResponse.choices[0].message.content.match(/```json/)) {
-                                    usedNonJsonCodeBlock = true;
-                                } else {
-                                    usedFallbackJson = true;
+            let filesToRead = [];
+            try {
+                const readParse = parser.extractAndValidate(readResponse.choices[0].message.content, BlackboxOutputSehema);
+                filesToRead = (readParse.code || []).filter(c => c.tool === 'read').map(c => c.path);
+            } catch (e) {
+                console.log("Error parsing read tool response:", e);
+            }
+            filesToRead?.push("package.json")
+            console.log("files to read", filesToRead)
+            // STEP 2: Fetch the content of those files from GitHub (parallel with limit and timeout)
+            function withTimeout(promise, ms, filePath) {
+                return Promise.race([
+                    promise,
+                    new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout fetching ${filePath}`)), ms))
+                ]);
+            }
+            const limit = pLimit(5); // max 5 concurrent requests
+            const token = process.env.GITHUB_TOKEN || (global.API_KEYS && global.API_KEYS.GITHUB_TOKEN);
+            const repoInfo = { owner: "usman-temp", repo: projectId };
+            const fileContents = await Promise.all(filesToRead.map(filePath =>
+                limit(async () => {
+                    try {
+                        if (global.io) global.io.to(projectId).emit('file:reading', { path: filePath, operation: 'reading' });
+                        const fileData = await withTimeout(readFileFromGitHub(repoInfo, filePath, token), 10000, filePath);
+                        let content = '';
+                        if (fileData.encoding === 'base64') {
+                            content = Buffer.from(fileData.content, 'base64').toString('utf-8');
+                        } else if (fileData.content) {
+                            content = fileData.content;
+                        } else if (fileData && fileData.content === '') {
+                            content = '';
+                        } else {
+                            content = '[File not found or error reading]';
+                        }
+                        if (global.io) global.io.to(projectId).emit('file:read', { path: filePath, operation: 'read' });
+                        return { filePath, content };
+                    } catch (err) {
+                        if (err && err.response) {
+                            console.log("Full error response for file", filePath, ":", err.response);
+                        }
+                        return { filePath, content: '[File not found or error reading]' };
+                    }
+                })
+            ));
+            // console.log("hello")
+            // STEP 3: Build the context string
+            const contextFilesString = fileContents.map(f => `File: ${f.filePath}\n\n${f.content}\n`).join('\n');
+            // STEP 4: Prepend this to your finalPrompt
+            // console.log("context files", contextFilesString)
+            const finalPromptWithContext = `CONTEXT FILES:\n${contextFilesString}\n\n${finalPrompt}`;
+
+            // console.log("final prompt with context", finalPromptWithContext )
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Blackbox operation timed out after 5 minutes')), 30000000);
+            });
+            const promptArray = prompts.map(p => ({
+                role: p.role,
+                content: p.content
+            }));
+            try {
+                const response = await Promise.race([
+                    model.chat([...prompts, { role: "user", content: finalPromptWithContext }]),
+                    timeoutPromise
+                ]);
+                const parser = new OutputParser();
+                await promptsModels.create({
+                    content: response.choices[0].message.content,
+                    role: "agent"
+                })
+                let codeArray;
+                let aiResponse = response;
+                let loopCount = 0;
+                const maxLoops = 10;
+                let usedFallbackJson = false;
+                let usedNonJsonCodeBlock = false;
+                const io = global.io;
+                while (loopCount < maxLoops) {
+                    try {
+                        parseContent = parser.extractAndValidate(aiResponse.choices[0].message.content, BlackboxOutputSehema);
+                        codeArray = parseContent.code;
+                        usedFallbackJson = false;
+                        usedNonJsonCodeBlock = false;
+                    } catch (parseError) {
+                        console.log("parseError", parseError)
+                        if (parseError.message.includes('No JSON blocks found')) {
+                            try {
+                                const jsonBlocks = parser.extractJsonBlocks(aiResponse.choices[0].message.content);
+                                console.log("json blocks", jsonBlocks)
+                                if (jsonBlocks.length > 0) {
+                                    const codeBlockMatch = aiResponse.choices[0].message.content.match(/```[a-zA-Z]*\s*([\s\S]*?)\s*```/);
+                                    if (codeBlockMatch && !aiResponse.choices[0].message.content.match(/```json/)) {
+                                        usedNonJsonCodeBlock = true;
+                                    } else {
+                                        usedFallbackJson = true;
+                                    }
+                                    parseContent = parser.parseAndValidate(jsonBlocks[0], BlackboxOutputSehema);
+                                    codeArray = parseContent.code;
+                                    break;
                                 }
-                                parseContent = parser.parseAndValidate(jsonBlocks[0], BlackboxOutputSehema);
-                                codeArray = parseContent.code;
-                                break;
+                            } catch (fallbackError) {
+                                const formatErrorPrompt = `Your previous response did not contain a JSON block. Your JSON response should be in triple backticks and marked as json (\`\`\`json). Please respond with a single JSON object wrapped in triple backticks and marked as json as described below. Regenerate your response again in following format\n\n${formatInstructionForBlackbox}`;
+                                aiResponse = await model.chat([
+                                    { role: "user", content: formatErrorPrompt }
+                                ]);
+                                loopCount++;
+                                continue;
                             }
-                        } catch (fallbackError) {
                             const formatErrorPrompt = `Your previous response did not contain a JSON block. Your JSON response should be in triple backticks and marked as json (\`\`\`json). Please respond with a single JSON object wrapped in triple backticks and marked as json as described below. Regenerate your response again in following format\n\n${formatInstructionForBlackbox}`;
                             aiResponse = await model.chat([
                                 { role: "user", content: formatErrorPrompt }
@@ -222,62 +236,98 @@ ${firstPrompt? firstPrompt :prompt}
                             loopCount++;
                             continue;
                         }
-                        const formatErrorPrompt = `Your previous response did not contain a JSON block. Your JSON response should be in triple backticks and marked as json (\`\`\`json). Please respond with a single JSON object wrapped in triple backticks and marked as json as described below. Regenerate your response again in following format\n\n${formatInstructionForBlackbox}`;
+                        const formatErrorPrompt = `Your previous response could not be parsed due to the following error: ${parseError.message}. Please return your response in the correct JSON format as described below. Regenerate your response again in following format\n\n${formatInstructionForBlackbox}`;
                         aiResponse = await model.chat([
                             { role: "user", content: formatErrorPrompt }
                         ]);
                         loopCount++;
                         continue;
                     }
-                    const formatErrorPrompt = `Your previous response could not be parsed due to the following error: ${parseError.message}. Please return your response in the correct JSON format as described below. Regenerate your response again in following format\n\n${formatInstructionForBlackbox}`;
-                    aiResponse = await model.chat([
-                        { role: "user", content: formatErrorPrompt }
-                    ]);
-                    loopCount++;
-                    continue;
-                }
                 
-                const hasRead = codeArray.some(c => c.tool === 'read');
-                if (hasRead) {
-                    const { aiResponse: nextAIResponse } = await handleReadToolsAndContinue(projectId, codeArray, githubRepoUrl, model, [], io, prompt);
-                    aiResponse = nextAIResponse;
-                    loopCount++;
-                    // continue;
-                } 
+                    const hasRead = codeArray.some(c => c.tool === 'read');
+                    if (hasRead) {
+                        const { aiResponse: nextAIResponse } = await handleReadToolsAndContinue(projectId, codeArray, githubRepoUrl, model, [], io, prompt);
+                        aiResponse = nextAIResponse;
+                        loopCount++;
+                        // continue;
+                    }
                     // console.log('Parsed codeArray:', codeArray);
                     console.log('About to call createFilesFromCodeArray with:', { projectId, codeArray, githubRepoUrl, ioExists: !!io });
                     await createFilesFromCodeArray(projectId, codeArray, githubRepoUrl, io);
                     break;
                 
-            }
-            if (usedFallbackJson || usedNonJsonCodeBlock) {
-                await model.chat([
-                    { role: "user", content: "Your JSON response was not wrapped in triple backticks and marked as json. Please always wrap your JSON in triple backticks and mark as json (```json ... ```)." }
-                ]);
-            }
-            if (loopCount === maxLoops) {
-                return errorResponse(res, {
-                    message: "Max AI loop count reached. Task may be incomplete.",
-                    statusCode: 500
-                });
-            }
+                }
+                if (usedFallbackJson || usedNonJsonCodeBlock) {
+                    await model.chat([
+                        { role: "user", content: "Your JSON response was not wrapped in triple backticks and marked as json. Please always wrap your JSON in triple backticks and mark as json (```json ... ```)." }
+                    ]);
+                }
+                if (loopCount === maxLoops) {
+                    return errorResponse(res, {
+                        message: "Max AI loop count reached. Task may be incomplete.",
+                        statusCode: 500
+                    });
+                }
+            
+                const buildStatusResult = await waitForGithubBuildStatus(githubRepoUrl);
+                console.log("749237492", buildStatusResult);
+                
+                
+                // attempt++;
+                finalPrompt = `
+
+        BEFORE EDITING FILE FIRST CALL READ TOOL FIRST
+        You are coding agent i will give requiremts and etc or simple user prompt you creat the project according to project stucture
+        This is file stucture of project and also configure the tailwind css so please tailwind css
+
+        IMPORTANT BEFORE FIRST READ THE FILE  IS COMPULSORY
+        
+        Write the beautifull compoent based codes using best practices and good quality code and dont create the files that already exist i will provide project stucture this
+        if you any external package then edit the package.json also accordingly packkage .json code should be in string mention the start of edit and end
+
+        ##TIP: Read the files first before editing so that you can excat the start and end lines
+        MY project is next js whose file structrure is 
+    ${project?.stringStucture}
+
+
+
+
+This is the format instructions
+${formatInstructionForBlackbox}
+
+User Says:
+I am facing issues in buidling the which logs i am provding you please correct this error
+${buildStatusResult?.errorLogs}
+        `
+                
+        if (buildStatusResult.status === 'success' || attempt === 5) {
             return successResponse(res, {
                 message: "We got ai response",
-                data: parseContent
+                data: parseContent,
+                buildStatus: buildStatusResult
             });
-        } catch (error) {
-            console.log("Blackbox API error:", error);
-            if (error.response) {
-                console.log("Full error response:", error.response);
-            }
-            if (error.message && error.message.includes('500 Internal Server Error')) {
+        }
+                
+            
+                
+            } catch (error) {
+                console.log("Blackbox API error:", error);
+                if (error.response) {
+                    console.log("Full error response:", error.response);
+                }
+                if (error.message && error.message.includes('500 Internal Server Error')) {
+                    return errorResponse(res, {
+                        message: "The AI service is currently unavailable or encountered an internal error. Please try again later or contact support if the issue persists.",
+                        statusCode: 502,
+                        error: error.message
+                    });
+                }
                 return errorResponse(res, {
-                    message: "The AI service is currently unavailable or encountered an internal error. Please try again later or contact support if the issue persists.",
-                    statusCode: 502,
+                    message: "Internal Server Error",
+                    statusCode: 500,
                     error: error.message
                 });
             }
-            throw error;
         }
     } catch (error) {
         if (error.message.includes('timed out')) {
@@ -301,6 +351,8 @@ ${firstPrompt? firstPrompt :prompt}
         }
     }
 }
+
+
 
 export const handleReadToolsAndContinue = async (
   projectId, codeArray, githubRepoUrl, model, contextMessages = [], io, userPrompt

@@ -5,7 +5,7 @@ import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import projectsModels from '../models/projects.models.js';
-
+import AdmZip from "adm-zip";
 
 
 export async function createGithubRepo(repoName, options = {}, readmeDescription = "") {
@@ -343,7 +343,7 @@ function extractRepoInfo(githubRepoUrl) {
   }
   return {
     owner: match[1],
-    repo: match[2].replace('.git', '')
+    repo: match[2].replace(/\.git$/, '') // Ensure .git is stripped
   };
 }
 
@@ -644,4 +644,98 @@ export async function createVercelProjectFromGitRepo(githubRepoUrl, projectName)
     },
   });
   return response.data;
+}
+
+/**
+ * Check if the latest GitHub Actions build (npm run build) for a repo passed or failed.
+ * @param {string} githubRepoUrl - The full GitHub repo URL (e.g. https://github.com/owner/repo)
+ * @param {string} workflowFileName - The workflow file name (e.g. 'build.yml')
+ * @returns {Promise<{status: string, errorLogs?: string}>}
+ */
+export async function checkGithubBuildStatus(githubRepoUrl, workflowFileName = 'build.yml') {
+  try {
+    const token = API_KEYS.GITHUB_TOKEN;
+    if (!token) return { status: 'error', error: 'GitHub token not found in config (API_KEYS.GITHUB_TOKEN)' };
+
+    // Parse owner/repo from URL
+    const match = githubRepoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)(\.git)?$/);
+    if (!match) return { status: 'error', error: 'Invalid GitHub repo URL' };
+    const owner = match[1];
+    const repo = match[2].replace(/\.git$/, ''); // Ensure .git is stripped
+
+    // Get workflow runs
+    const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowFileName}/runs?per_page=1`;
+    let runsResp;
+    try {
+      runsResp = await axios.get(runsUrl, {
+        headers: { Authorization: `token ${token}` }
+      });
+    } catch (err) {
+      if (err.response && err.response.status === 404) {
+        return { status: 'error', error: 'Workflow or repository not found on GitHub' };
+      }
+      return { status: 'error', error: err.message };
+    }
+    const run = runsResp.data.workflow_runs[0];
+    if (!run) return { status: 'no_runs' };
+
+    // If the run is still in progress, don't fetch logs yet
+    if (run.conclusion === null) {
+      return { status: 'in_progress', errorLogs: null };
+    }
+
+    // Check status
+    if (run.conclusion === 'success') {
+      return { status: 'success' };
+    } else {
+      // Get logs if failed, but only if logs_url exists
+      if (run.logs_url) {
+        try {
+          const logsResp = await axios.get(run.logs_url, {
+            headers: { Authorization: `token ${token}` },
+            responseType: 'arraybuffer'
+          });
+          let logs;
+          try {
+            const zip = new AdmZip(logsResp.data);
+            const zipEntries = zip.getEntries();
+            logs = zipEntries.map(entry => entry.getData().toString('utf-8')).join('\n');
+          } catch (e) {
+            logs = Buffer.from(logsResp.data).toString('utf-8');
+          }
+          return { status: run.conclusion, errorLogs: logs };
+        } catch (err) {
+          if (err.response && err.response.status === 404) {
+            return { status: run.conclusion, errorLogs: '[Logs not found for this workflow run]' };
+          }
+          return { status: run.conclusion, errorLogs: err.message };
+        }
+      } else {
+        return { status: run.conclusion, errorLogs: '[No logs_url available for this workflow run]' };
+      }
+    }
+  } catch (error) {
+    return { status: 'error', error: error.message };
+  }
+}
+
+/**
+ * Waits for the latest GitHub Actions workflow run to finish, then returns the result and logs.
+ * @param {string} githubRepoUrl - The full GitHub repo URL (e.g. https://github.com/owner/repo)
+ * @param {string} workflowFileName - The workflow file name (e.g. 'build.yml')
+ * @param {number} maxWaitMs - Maximum time to wait in milliseconds (default: 120000 = 2 minutes)
+ * @param {number} pollIntervalMs - Polling interval in milliseconds (default: 5000 = 5 seconds)
+ * @returns {Promise<{status: string, errorLogs?: string, error?: string}>}
+ */
+export async function waitForGithubBuildStatus(githubRepoUrl, workflowFileName = 'build.yml', maxWaitMs = 120000, pollIntervalMs = 5000) {
+  // console.log("thi is ")
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const result = await checkGithubBuildStatus(githubRepoUrl, workflowFileName);
+    if (result.status !== 'in_progress') {
+      return result; // success, failure, or error
+    }
+    await new Promise(res => setTimeout(res, pollIntervalMs));
+  }
+  return { status: 'timeout', error: 'Timed out waiting for workflow to complete.' };
 }

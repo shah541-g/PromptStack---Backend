@@ -15,6 +15,7 @@ import { connectDB, getConnectionStatus } from "./utils/db.utils.js"
 import { accessLogger, errorLogger, consoleLogger, appLogger } from "./utils/logger.js"
 import router from "./routes/route.index.js"
 import Blackbox from './helpers/blackbox.helper.js';
+import { checkGithubBuildStatus, waitForGithubBuildStatus } from './helpers/projects.helper.js';
 
 const { SERVER_CONFIG, DB_CONFIG, JWT_CONFIG, validateEnvironment } = config;
 
@@ -27,6 +28,8 @@ global.io = io;
 validateEnvironment()
 
 connectDB()
+
+// console.log(await checkGithubBuildStatus("https://github.com/usman-temp/686be6c1b66d32d2b7ca2010.git"))
 
 io.on('connection', (socket) => {
   socket.on('join', (projectId) => {

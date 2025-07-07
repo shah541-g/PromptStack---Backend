@@ -83,3 +83,66 @@ export const createProject = async (req, res) => {
         });
     }
 }
+
+export const getProjectById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const project = await projectsModels.findOne({_id: id, user: req.user._id});
+        if (!project) {
+            return errorResponse(res, {
+                message: "Project not found",
+                statusCode: 404
+            });
+        }
+        return successResponse(res, {
+            message: "Project fetched successfully",
+            data: project
+        });
+    } catch (error) {
+        return errorResponse(res, {
+            statusCode: 500,
+            message: "Internal server error",
+            error: error.message
+        });
+    }
+};
+
+export const getProjectsByUserId = async (req, res) => {
+    try {
+        
+        const projects = await projectsModels.find({ user: req.user._id });
+        return successResponse(res, {
+            message: "Projects fetched successfully",
+            data: projects
+        });
+    } catch (error) {
+        return errorResponse(res, {
+            statusCode: 500,
+            message: "Internal server error",
+            error: error.message
+        });
+    }
+};
+
+export const deleteProject = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const project = await projectsModels.findOneAndDelete({_id: id, user: req.user._id});
+        if (!project) {
+            return errorResponse(res, {
+                message: "Project not found",
+                statusCode: 404
+            });
+        }
+        return successResponse(res, {
+            message: "Project deleted successfully",
+            data: project
+        });
+    } catch (error) {
+        return errorResponse(res, {
+            statusCode: 500,
+            message: "Internal server error",
+            error: error.message
+        });
+    }
+};

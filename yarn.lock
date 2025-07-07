@@ -149,6 +149,11 @@ accepts@~1.3.4:
     mime-types "~2.1.34"
     negotiator "0.6.3"
 
+adm-zip@^0.5.16:
+  version "0.5.16"
+  resolved "https://registry.npmjs.org/adm-zip/-/adm-zip-0.5.16.tgz"
+  integrity sha512-TGw5yVi4saajsSEgz25grObGHEUaDrniwvA2qwSC060KfqGPdglhvPMA2lPIoxs3PQIItj2iag35fONcQqgUaQ==
+
 agentkeepalive@^4.2.1:
   version "4.6.0"
   resolved "https://registry.npmjs.org/agentkeepalive/-/agentkeepalive-4.6.0.tgz"

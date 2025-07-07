@@ -50,6 +50,7 @@ class Blackbox {
         );
         
         console.log(`Successfully connected to Blackbox API on attempt ${attempt}`);
+        // console.log(response.data?.choices[0].message.content)
         return response.data;
         
       } catch (error) {

@@ -1,3 +1,5 @@
+import http from 'http';
+import { Server } from 'socket.io';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -15,20 +17,30 @@ import { accessLogger, errorLogger, consoleLogger, appLogger } from "./utils/log
 import router from "./routes/route.index.js"
 import Blackbox from './helpers/blackbox.helper.js';
 
-
 const { SERVER_CONFIG, DB_CONFIG, JWT_CONFIG, validateEnvironment } = config;
 
 const app = express()
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
+app.set('io', io);
+global.io = io;
 
 validateEnvironment()
 
 connectDB()
 
-// Set timeouts to prevent ECONNRESET errors
+io.on('connection', (socket) => {
+  socket.on('join', (projectId) => {
+    if (projectId) {
+      socket.join(projectId);
+      console.log(`Socket ${socket.id} joined room ${projectId}`);
+    }
+  });
+});
+
 app.use((req, res, next) => {
-  // Set timeout to 10 minutes for long-running operations
-  req.setTimeout(600000); // 10 minutes
-  res.setTimeout(600000); // 10 minutes
+  req.setTimeout(600000);
+  res.setTimeout(600000);
   next();
 });
 
@@ -75,9 +87,6 @@ app.get('/health', (req, res) => {
   })
 })
 
-// const model = new Blackbox(API_KEYS.BLACKBOX_API_KEY)
-// console.log(await model.testConnection())
-
 app.use((err, req, res, next) => {
   appLogger.error('Unhandled error occurred', err);
   res.status(500).json({
@@ -97,7 +106,8 @@ app.use((req, res) => {
   });
 });
 
-app.listen(SERVER_CONFIG.PORT, () => {
+app.listen = undefined;
+server.listen(SERVER_CONFIG.PORT, () => {
   appLogger.info('Server started successfully', {
     port: SERVER_CONFIG.PORT,
     environment: SERVER_CONFIG.NODE_ENV,
@@ -109,6 +119,6 @@ app.listen(SERVER_CONFIG.PORT, () => {
   console.log(`🌍 Environment: ${SERVER_CONFIG.NODE_ENV}`)
   console.log(`📊 MongoDB URI: ${DB_CONFIG.MONGODB_URI ? 'Configured' : 'Not configured'}`)
   console.log(`🔐 JWT Secret: ${JWT_CONFIG.SECRET ? 'Configured' : 'Not configured'}`)
-})
+});
 
 export default app

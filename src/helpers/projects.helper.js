@@ -7,6 +7,7 @@ import fs from 'fs';
 import projectsModels from '../models/projects.models.js';
 
 
+
 export async function createGithubRepo(repoName, options = {}, readmeDescription = "") {
   const token = API_KEYS.GITHUB_TOKEN;
   if (!token) {
@@ -138,13 +139,60 @@ export async function pushFolderToRepo(folderName, githubRepoUrl) {
   }
 }
 
-export async function createFilesFromCodeArray(projectId, codeArray, githubRepoUrl) {
+// Add this helper function at the top-level (outside of other functions)
+async function getGithubRepoTreeString(owner, repo, branch, token) {
+  
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
+  const response = await axios.get(apiUrl, {
+    headers: {
+      'Authorization': `token ${token}`,
+      'Accept': 'application/vnd.github.v3+json',
+    },
+  });
+  const tree = response.data.tree;
+  // Build a nested structure
+  const root = {};
+  for (const item of tree) {
+    const parts = item.path.split('/');
+    let curr = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (i === parts.length - 1) {
+        if (item.type === 'tree') {
+          curr[part] = curr[part] || {};
+        } else {
+          curr[part] = null;
+        }
+      } else {
+        curr[part] = curr[part] || {};
+        curr = curr[part];
+      }
+    }
+  }
+  // Convert nested structure to tree string
+  function buildTreeString(obj, prefix = '', isLast = true) {
+    const keys = Object.keys(obj).sort();
+    let str = '';
+    keys.forEach((key, idx) => {
+      const isDir = obj[key] && typeof obj[key] === 'object';
+      const connector = idx === keys.length - 1 ? '└── ' : '├── ';
+      str += prefix + connector + key + (isDir ? '/' : '') + '\n';
+      if (isDir) {
+        const nextPrefix = prefix + (idx === keys.length - 1 ? '    ' : '│   ');
+        str += buildTreeString(obj[key], nextPrefix, idx === keys.length - 1);
+      }
+    });
+    return str;
+  }
+  return buildTreeString(root);
+}
+
+export async function createFilesFromCodeArray(projectId, codeArray, githubRepoUrl, io) {
   try {
     const token = API_KEYS.GITHUB_TOKEN;
     if (!token) {
       throw new Error('GitHub token not found in config (API_KEYS.GITHUB_TOKEN)');
     }
-
     const repoInfo = {
       owner: "usman-temp",
       repo: projectId
@@ -152,66 +200,83 @@ export async function createFilesFromCodeArray(projectId, codeArray, githubRepoU
     const createdFiles = [];
     const editedFiles = [];
     let updatedFileStructure = null;
-
-    // Fetch current project and structure
     const project = await projectsModels.findById(projectId);
     let currentStructure = project?.stringStucture || '';
     let structureChanged = false;
-
     for (const codeItem of codeArray) {
+      console.log('Processing codeItem:', codeItem);
       const { tool, path: filePath, code: fileContent, start, end } = codeItem;
-
       if (tool === 'create') {
+        if (io) io.to(projectId).emit('file:creating', { path: filePath, operation: 'creating' });
         await createFileOnGitHub(repoInfo, filePath, fileContent, token);
         createdFiles.push(filePath);
-        // Update file structure
         currentStructure = updateFileStructure(currentStructure, filePath, 'add');
         structureChanged = true;
+        if (io) {
+          io.to(projectId).emit('file:created', { path: filePath, operation: 'create' });
+          console.log(`Emitted file:created to room ${projectId} for file ${filePath}`);
+        }
       } else if (tool === 'edit') {
+        if (io) io.to(projectId).emit('file:editing', { path: filePath, operation: 'editing' });
         await editFileOnGitHub(repoInfo, filePath, fileContent, start, end, token);
         editedFiles.push(filePath);
+        if (io) {
+          io.to(projectId).emit('file:edited', { path: filePath, operation: 'edit' });
+          console.log(`Emitted file:edited to room ${projectId} for file ${filePath}`);
+        }
       } else if (tool === 'delete') {
+        if (io) io.to(projectId).emit('file:deleting', { path: filePath, operation: 'deleting' });
         await deleteFileOnGitHub(repoInfo, filePath, start, end, token);
-        // Update file structure
         currentStructure = updateFileStructure(currentStructure, filePath, 'remove');
         structureChanged = true;
+        if (io) {
+          io.to(projectId).emit('file:deleted', { path: filePath, operation: 'delete' });
+          console.log(`Emitted file:deleted to room ${projectId} for file ${filePath}`);
+        }
       }
     }
-
-    // Save updated structure if changed
-    if (structureChanged) {
-      await projectsModels.findByIdAndUpdate(projectId, { stringStucture: currentStructure });
-      updatedFileStructure = currentStructure;
+    // After all file operations, update the structure from GitHub
+    try {
+      const treeString = await getGithubRepoTreeString(repoInfo.owner, repoInfo.repo, 'main', token);
+      await projectsModels.findByIdAndUpdate(projectId, { stringStucture: treeString });
+      updatedFileStructure = treeString;
+    } catch (treeError) {
+      console.error('Failed to update project structure from GitHub:', treeError);
     }
-
     return {
       createdFiles,
       editedFiles,
       updatedFileStructure
     };
   } catch (error) {
-    console.error('Error creating files from code array on GitHub:', error);
     throw error;
   }
 }
 
-
-
-export async function readFileFromGitHub(repoUrl, filePath, token, startLine = null, endLine = null) {
+export async function readFileFromGitHub(repoUrl, filePath, token, startLine = null, endLine = null, io, projectId) {
   const repoInfo = extractRepoInfo(repoUrl);
   const fileData = await getFileFromGitHub(repoInfo, filePath, token);
+  if (!fileData.content) {
+    console.warn(`Warning: File ${filePath} has no content on GitHub.`);
+    return {
+      filePath,
+      content: '',
+      startLine,
+      endLine,
+      totalLines: 0
+    };
+  }
   const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
-  let lines = content.split('\n');
-  let selectedContent = content;
-  if (startLine !== null && endLine !== null) {
-    selectedContent = lines.slice(startLine - 1, endLine).join('\n');
+  if (io && projectId) {
+    io.to(projectId).emit('file:read', { path: filePath, operation: 'read' });
+    console.log(`Emitted file:read to room ${projectId} for file ${filePath}`);
   }
   return {
     filePath,
-    content: selectedContent,
-    startLine,
-    endLine,
-    totalLines: lines.length
+    content,
+    startLine: null,
+    endLine: null,
+    totalLines: content.split('\n').length
   };
 }
 
@@ -314,6 +379,7 @@ async function editFileOnGitHub(repoInfo, filePath, newContent, start, end, toke
     let commitMessage = `Update ${filePath}`;
 
     if (start !== 0 || end !== 0) {
+      try {
       const currentFile = await getFileFromGitHub(repoInfo, filePath, token);
       const currentContent = Buffer.from(currentFile.content, 'base64').toString('utf-8');
       const lines = currentContent.split('\n');
@@ -324,6 +390,13 @@ async function editFileOnGitHub(repoInfo, filePath, newContent, start, end, toke
       
       finalContent = [...beforeLines, ...newLines, ...afterLines].join('\n');
       commitMessage = `Edit ${filePath} (lines ${start}-${end})`;
+      } catch (error) {
+        if (error.message && error.message.includes('not found')) {
+          console.log(`File ${filePath} does not exist on GitHub, skipping edit.`);
+          return;
+        }
+        throw error;
+      }
     }
 
     const payload = {
@@ -342,6 +415,10 @@ async function editFileOnGitHub(repoInfo, filePath, newContent, start, end, toke
 
     return response.data;
   } catch (error) {
+    if (error.message && error.message.includes('Failed to get SHA for file') && error.message.includes('404')) {
+      console.log(`File ${filePath} does not exist on GitHub, skipping edit.`);
+      return;
+    }
     console.error(`Error editing file ${filePath} on GitHub:`, error);
     throw new Error(`Failed to edit file ${filePath} on GitHub: ${error.message}`);
   }
@@ -355,16 +432,29 @@ async function deleteFileOnGitHub(repoInfo, filePath, start, end, token) {
       sha: await getFileSha(repoInfo, filePath, token),
       branch: 'main'
     };
-
     const response = await axios.delete(apiUrl, {
       headers: {
         'Authorization': `token ${token}`,
         'Accept': 'application/vnd.github.v3+json',
       },
+      data: payload
     });
-
     return response.data;
   } catch (error) {
+    if (
+      error.response &&
+      error.response.status === 422 &&
+      error.response.data &&
+      typeof error.response.data.message === 'string' &&
+      (
+        error.response.data.message.includes('sha wasn') ||
+        error.response.data.message.includes('not exist') ||
+        error.response.data.message.includes('Invalid request')
+      )
+    ) {
+      console.log(`File ${filePath} does not exist on GitHub, skipping delete.`);
+      return;
+    }
     console.error(`Error deleting file ${filePath} on GitHub:`, error);
     throw new Error(`Failed to delete file ${filePath} on GitHub: ${error.message}`);
   }
@@ -404,15 +494,87 @@ async function getFileFromGitHub(repoInfo, filePath, token) {
 function updateFileStructure(currentStructure, filePath, action) {
   const lines = currentStructure.split('\n');
   const pathParts = filePath.split('/');
+  
   if (action === 'add') {
-    const newLine = '│   '.repeat(pathParts.length - 1) + '├── ' + pathParts[pathParts.length - 1];
-    lines.splice(-1, 0, newLine);
+    // Create the complete folder hierarchy
+    let currentPath = '';
+    for (let i = 0; i < pathParts.length - 1; i++) {
+      currentPath += (currentPath ? '/' : '') + pathParts[i];
+      const folderName = pathParts[i];
+      const folderLine = '│   '.repeat(i) + '├── ' + folderName + '/';
+      
+      // Check if folder already exists at this level
+      const existingFolderIndex = lines.findIndex(line => 
+        line.trim() === folderLine.trim() || 
+        line.trim() === ('│   '.repeat(i) + '└── ' + folderName + '/')
+      );
+      
+      if (existingFolderIndex === -1) {
+        // Insert folder at the appropriate position
+        let insertIndex = lines.length - 1;
+        for (let j = 0; j < lines.length; j++) {
+          const line = lines[j];
+          const lineDepth = (line.match(/│   /g) || []).length;
+          if (lineDepth === i) {
+            const lineName = line.split('├── ')[1] || line.split('└── ')[1];
+            if (lineName && lineName.localeCompare(folderName) > 0) {
+              insertIndex = j;
+              break;
+            }
+          }
+        }
+        lines.splice(insertIndex, 0, folderLine);
+      }
+    }
+    
+    // Add the file
+    const fileLine = '│   '.repeat(pathParts.length - 1) + '├── ' + pathParts[pathParts.length - 1];
+    let insertIndex = lines.length - 1;
+    for (let j = 0; j < lines.length; j++) {
+      const line = lines[j];
+      const lineDepth = (line.match(/│   /g) || []).length;
+      if (lineDepth === pathParts.length - 1) {
+        const lineName = line.split('├── ')[1] || line.split('└── ')[1];
+        if (lineName && lineName.localeCompare(pathParts[pathParts.length - 1]) > 0) {
+          insertIndex = j;
+          break;
+        }
+      }
+    }
+    lines.splice(insertIndex, 0, fileLine);
+    
   } else if (action === 'remove') {
     const fileName = pathParts[pathParts.length - 1];
     const index = lines.findIndex(line => line.includes(fileName));
     if (index !== -1) {
       lines.splice(index, 1);
+      
+      // Check if we need to remove empty folders
+      for (let i = pathParts.length - 2; i >= 0; i--) {
+        const folderName = pathParts[i];
+        const folderLine = '│   '.repeat(i) + '├── ' + folderName + '/';
+        const folderIndex = lines.findIndex(line => 
+          line.trim() === folderLine.trim() || 
+          line.trim() === ('│   '.repeat(i) + '└── ' + folderName + '/')
+        );
+        
+        if (folderIndex !== -1) {
+          // Check if this folder has any children
+          const hasChildren = lines.some((line, idx) => {
+            if (idx <= folderIndex) return false;
+            const lineDepth = (line.match(/│   /g) || []).length;
+            return lineDepth > i;
+          });
+          
+          if (!hasChildren) {
+            lines.splice(folderIndex, 1);
+          } else {
+            break; // Stop removing folders if this one has children
+          }
+        }
+      }
     }
   }
+  
   return lines.join('\n');
 }

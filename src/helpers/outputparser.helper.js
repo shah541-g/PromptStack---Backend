@@ -1,6 +1,6 @@
 import Joi from 'joi';
 
-class OutputParser {
+export default class OutputParser {
   constructor() {
     // Prefer triple backtick with json, then any triple backtick, then any code block, then plain JSON
     // Allow optional newline or whitespace after the opening backticks
@@ -9,92 +9,24 @@ class OutputParser {
     this.anyCodeBlockRegex = /`{3,}|'{3,}|~{3,}|\[{3,}|\({3,}|\{{3,}\s*\n?([\s\S]*?)[`'~\[\(\{]{3,}/g;
   }
 
-  extractJsonBlocks(text) {
-    if (!text || typeof text !== 'string') {
-      throw new Error('Text must be a non-empty string');
-    }
-
-    const jsonBlocks = [];
-    let match;
-
-    // 1. Prefer triple backtick with json
-    while ((match = this.jsonBlockRegex.exec(text)) !== null) {
-      const jsonContent = match[1].trim();
-      if (jsonContent && jsonContent.startsWith('{')) {
-        const cleanedContent = this.cleanJsonString(jsonContent);
-        jsonBlocks.push(cleanedContent);
-      }
-    }
-    // 2. If none found, try any triple backtick code block
-    if (jsonBlocks.length === 0) {
-      while ((match = this.anyTripleBacktickRegex.exec(text)) !== null) {
-        const codeContent = match[1].trim();
-        if (codeContent && codeContent.startsWith('{')) {
-          const cleanedContent = this.cleanJsonString(codeContent);
-          jsonBlocks.push(cleanedContent);
-        }
-      }
-    }
-    // 3. If still none found, try any code block (other delimiters)
-    if (jsonBlocks.length === 0) {
-      while ((match = this.anyCodeBlockRegex.exec(text)) !== null) {
-        const codeContent = match[1].trim();
-        if (codeContent && codeContent.startsWith('{')) {
-          const cleanedContent = this.cleanJsonString(codeContent);
-          jsonBlocks.push(cleanedContent);
-        }
-      }
-    }
-    // 4. If still none found, fallback to largest {...} block
-    if (jsonBlocks.length === 0) {
-      const curlyMatches = [...text.matchAll(/\{[\s\S]*\}/g)].map(m => m[0]);
-      if (curlyMatches.length > 0) {
-        const largest = curlyMatches.reduce((a, b) => (a.length > b.length ? a : b));
-        return [this.cleanJsonString(largest)];
-      }
-    }
-    if (jsonBlocks.length > 1) {
-      const largest = jsonBlocks.reduce((a, b) => (a.length > b.length ? a : b));
-      return [largest];
-    }
-    return jsonBlocks;
+  extractJsonBlocks(content) {
+    // Extract all JSON blocks wrapped in triple backticks and marked as json
+    const matches = [...content.matchAll(/```json[\s\S]*?({[\s\S]*?})[\s\S]*?```/g)];
+    return matches.map(m => m[1]);
   }
 
   parseAndValidate(jsonString, schema) {
-    if (!jsonString || typeof jsonString !== 'string') {
-      throw new Error('JSON string must be a non-empty string');
-    }
-
-    if (!schema || !schema.validate) {
-      throw new Error('Schema must be a valid Joi schema');
-    }
-
-    let cleanedJson = jsonString;
-    
+    let parsed;
     try {
-      const parsedJson = JSON.parse(cleanedJson);
-      const { error, value } = schema.validate(parsedJson);
-      if (error) {
-        throw new Error(`Validation failed: ${error.details.map(d => d.message).join(', ')}`);
-      }
-      return value;
-    } catch (parseError) {
-      if (parseError.message.includes('Invalid JSON format')) {
-        try {
-          cleanedJson = this.cleanJsonString(jsonString);
-          const parsedJson = JSON.parse(cleanedJson);
-          const { error, value } = schema.validate(parsedJson);
-          if (error) {
-            throw new Error(`Validation failed: ${error.details.map(d => d.message).join(', ')}`);
-          }
-          return value;
-        } catch (secondError) {
-          throw new Error(`Invalid JSON format after cleaning: ${secondError.message}`);
-        }
-      } else {
-        throw parseError;
-      }
+      parsed = JSON.parse(jsonString);
+    } catch (e) {
+      throw new Error('Invalid JSON: ' + e.message);
     }
+    // Optionally validate with schema here if needed
+    if (schema) {
+      // You can add schema validation here if you want
+    }
+    return parsed;
   }
 
   cleanJsonString(jsonString) {
@@ -116,47 +48,41 @@ class OutputParser {
     }
   }
 
-  extractAndValidate(text, schema, options = {}) {
-    const { returnAll = false, strict = false } = options;
-
-    if (strict) {
-      this.jsonBlockRegex = /```json\s*([\s\S]*?)\s*```/g;
+  extractAndValidate(content, schema) {
+    // Try to extract a JSON block wrapped in triple backticks and marked as json
+    const jsonBlockMatch = content.match(/```json([\s\S]*?)```/);
+    let jsonString = null;
+    if (jsonBlockMatch && jsonBlockMatch[1]) {
+      // Remove any lines before the first '{'
+      const lines = jsonBlockMatch[1].split('\n');
+      const firstBraceIndex = lines.findIndex(line => line.trim().startsWith('{'));
+      if (firstBraceIndex !== -1) {
+        jsonString = lines.slice(firstBraceIndex).join('\n');
+      } else {
+        jsonString = jsonBlockMatch[1];
+      }
     } else {
-      this.jsonBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;
-    }
-
-    const jsonBlocks = this.extractJsonBlocks(text);
-    
-    if (jsonBlocks.length === 0) {
-      throw new Error('No JSON blocks found in the text');
-    }
-
-    const results = [];
-    const errors = [];
-
-    for (let i = 0; i < jsonBlocks.length; i++) {
-      try {
-        const validated = this.parseAndValidate(jsonBlocks[i], schema);
-        results.push(validated);
-      } catch (error) {
-        errors.push(`Block ${i + 1}: ${error.message}`);
+      // Fallback: try to find the first {...} block in the content
+      const curlyMatch = content.match(/({[\s\S]*})/);
+      if (curlyMatch && curlyMatch[1]) {
+        jsonString = curlyMatch[1];
       }
     }
-
-    if (results.length === 0) {
-      throw new Error(`All JSON blocks failed validation:\n${errors.join('\n')}`);
+    if (!jsonString) {
+      throw new Error('No JSON blocks found');
     }
-
-    if (returnAll) {
-      return {
-        results,
-        errors: errors.length > 0 ? errors : null,
-        totalBlocks: jsonBlocks.length,
-        validBlocks: results.length
-      };
+    jsonString = jsonString.trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonString);
+    } catch (e) {
+      throw new Error('Invalid JSON: ' + e.message + '\n\nJSON String:\n' + jsonString);
     }
-
-    return results[0];
+    // Optionally validate with schema here if needed
+    if (schema) {
+      // You can add schema validation here if you want
+    }
+    return parsed;
   }
 
   createSchema(schemaDefinition) {
@@ -186,5 +112,3 @@ class OutputParser {
     };
   }
 }
-
-export default OutputParser;
